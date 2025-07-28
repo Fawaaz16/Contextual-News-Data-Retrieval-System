@@ -1,0 +1,1 @@
+Activate the environment: .\.venv\Scripts\activate
