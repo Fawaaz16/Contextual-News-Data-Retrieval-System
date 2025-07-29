@@ -1,4 +1,3 @@
-# app.py (Flask service)
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func, text
@@ -33,7 +32,21 @@ class Category(db.Model):
     category_id = db.Column(db.Integer, primary_key=True)
     category_name = db.Column(db.String(50), unique=True)
 
-@app.route('/category')
+
+def serialize_article(article):
+    """Helper to serialize Article model to dict with required fields."""
+    return {
+        'id': article.id,
+        'title': article.title,
+        'description': article.description,
+        'url': article.url,
+        'publication_date': article.publication_date.isoformat() if article.publication_date else None,
+        'source_name': article.source_name,
+        'categories': [c.category_name for c in article.categories],
+        'relevance_score': article.relevance_score
+    }
+
+@app.route('/api/v1/news/category')
 def get_by_category():
     cat = request.args.get('category')
     if not cat:
@@ -47,9 +60,9 @@ def get_by_category():
         .limit(5)
         .all()
     )
-    return jsonify([a.id for a in articles])
+    return jsonify([serialize_article(a) for a in articles])
 
-@app.route('/score')
+@app.route('/api/v1/news/score')
 def get_by_score():
     try:
         min_score = float(request.args.get('min_score', 0))
@@ -62,26 +75,25 @@ def get_by_score():
         .limit(5)
         .all()
     )
-    return jsonify([a.id for a in articles])
+    return jsonify([serialize_article(a) for a in articles])
 
-@app.route('/search')
+@app.route('/api/v1/news/search')
 def full_text_search():
     query = request.args.get('query')
     if not query:
         return jsonify({'error': 'query parameter required'}), 400
     match_expr = func.match(Article.title, Article.description, against=query)
     comp_score = match_expr + Article.relevance_score
-    articles = (
+    results = (
         Article.query
         .filter(match_expr > 0)
-        .add_columns(comp_score.label('score'))
-        .order_by(text('score DESC'))
+        .order_by(text('(' + str(comp_score.compile(compile_kwargs={"literal_binds": True})) + ') DESC'))
         .limit(5)
         .all()
     )
-    return jsonify([{ 'id': a.Article.id, 'score': score } for a, score in articles])
+    return jsonify([serialize_article(a) for a in results])
 
-@app.route('/source')
+@app.route('/api/v1/news/source')
 def get_by_source():
     source = request.args.get('source')
     if not source:
@@ -93,9 +105,9 @@ def get_by_source():
         .limit(5)
         .all()
     )
-    return jsonify([a.id for a in articles])
+    return jsonify([serialize_article(a) for a in articles])
 
-@app.route('/nearby')
+@app.route('/api/v1/news/nearby')
 def get_nearby():
     try:
         lat = float(request.args.get('lat'))
@@ -103,20 +115,22 @@ def get_nearby():
         radius = float(request.args.get('radius', 10))
     except (TypeError, ValueError):
         return jsonify({'error': 'lat, lon, radius must be numeric'}), 400
+
     haversine = 6371 * func.acos(
         func.cos(func.radians(lat)) * func.cos(func.radians(Article.latitude)) *
         func.cos(func.radians(Article.longitude) - func.radians(lon)) +
         func.sin(func.radians(lat)) * func.sin(func.radians(Article.latitude))
     )
-    articles = (
+    results = (
         Article.query
         .add_columns(haversine.label('distance'))
         .filter(haversine <= radius)
         .order_by(text('distance ASC'))
-        .limit(5)
+        .limit(1)
         .all()
     )
-    return jsonify([{ 'id': a.Article.id, 'distance_km': dist } for a, dist in articles])
+    articles = [article for article, dist in results]
+    return jsonify([serialize_article(a) for a in articles])
 
 if __name__ == '__main__':
     app.run(debug=True)
