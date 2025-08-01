@@ -8,7 +8,6 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# Association table
 article_categories = db.Table('article_categories',
     db.Column('article_id', db.String(36), db.ForeignKey('articles.id'), primary_key=True),
     db.Column('category_id', db.Integer, db.ForeignKey('categories.category_id'), primary_key=True)
@@ -34,7 +33,6 @@ class Category(db.Model):
 
 
 def serialize_article(article):
-    """Helper to serialize Article model to dict with required fields."""
     return {
         'id': article.id,
         'title': article.title,
@@ -79,19 +77,31 @@ def get_by_score():
 
 @app.route('/api/v1/news/search')
 def full_text_search():
-    query = request.args.get('query')
-    if not query:
+    query_param = request.args.get('query')
+    if not query_param:
         return jsonify({'error': 'query parameter required'}), 400
-    match_expr = func.match(Article.title, Article.description, against=query)
-    comp_score = match_expr + Article.relevance_score
-    results = (
+
+    # like_pattern = f"%{query_param}%"
+    # articles = (
+    #     Article.query
+    #     .filter(
+    #         Article.title.ilike(like_pattern) |
+    #         Article.description.ilike(like_pattern)
+    #     )
+    #     .order_by(Article.relevance_score.desc())
+    #     .limit(5)
+    #     .all()
+    # )
+    match_expr = "MATCH(title, description) AGAINST(:query_param IN NATURAL LANGUAGE MODE)"
+    articles = (
         Article.query
-        .filter(match_expr > 0)
-        .order_by(text('(' + str(comp_score.compile(compile_kwargs={"literal_binds": True})) + ') DESC'))
+        .filter(text(match_expr))
+        .order_by(text(f"{match_expr} + relevance_score DESC"))
+        .params(query_param=query_param)
         .limit(5)
         .all()
     )
-    return jsonify([serialize_article(a) for a in results])
+    return jsonify([serialize_article(a) for a in articles])
 
 @app.route('/api/v1/news/source')
 def get_by_source():
@@ -115,7 +125,6 @@ def get_nearby():
         radius = float(request.args.get('radius', 10))
     except (TypeError, ValueError):
         return jsonify({'error': 'lat, lon, radius must be numeric'}), 400
-
     haversine = 6371 * func.acos(
         func.cos(func.radians(lat)) * func.cos(func.radians(Article.latitude)) *
         func.cos(func.radians(Article.longitude) - func.radians(lon)) +
@@ -126,7 +135,7 @@ def get_nearby():
         .add_columns(haversine.label('distance'))
         .filter(haversine <= radius)
         .order_by(text('distance ASC'))
-        .limit(1)
+        .limit(5)
         .all()
     )
     articles = [article for article, dist in results]
